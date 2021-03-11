@@ -5,7 +5,7 @@
       /**
       API DETAILS
       **/
-      API_HOST = "localhost:4098"
+      API_HOST = "localhost:4098" // Default host
       API_URLS = {
         "latest": "http://"+API_HOST+"/latest",
         "all": "http://"+API_HOST+"/all",
@@ -14,8 +14,8 @@
         "days": "http://"+API_HOST+"/days"
       }
       CHART = null;
-      loaded_initial = false
-      last_timestamp = 0
+      URL_PARAMS = null;
+      LAST_TIMESTAMP = 0
       
       /** 
       HELPER FUNCTIONS 
@@ -26,22 +26,41 @@
       {
         return document.getElementById(id);
       }
-
-      // UTC -> Local Date
-      function utcDateToLocalDate(date)
+      
+      // Sanitize strings for HTML
+      function htmlSanitize(str)
       {
-        var newDate = new Date(date.getTime() - date.getTimezoneOffset()*60*1000);
-        return newDate;   
+        // Only define the map once.
+        if(this.map === undefined){
+          this.map = new Map([
+            ["<", "&lt;"],
+            [">", "&gt;"],
+            ['"', "&quot;"],
+            ["'", "&apos;"],
+            [" ", "&nbsp;"]
+          ]);
+        }
+        this.map.forEach((value, key, map) => {
+          str = str.replaceAll(key, value);
+        });
+        return str;
       }
       
       // Unix UTC Timestamp -> Local Date object
       function utcUnixTSToLocalDate(timestamp)
       {
-        var date = new Date(timestamp* 1000);
-        return utcDateToLocalDate(date)
+        var offset = new Date().getTimezoneOffset();
+        return new Date((timestamp - offset*60)*1000);
       }
       
-	  // Updates the status widgets
+      // Date to -> UTC Timestamp
+      function localDateToUTCUnixTS(date)
+      {
+        var offset = new Date().getTimezoneOffset();
+        return Math.round( (Date.now() / 1000) + (offset * 60));
+      }
+      
+      // Updates the status widgets
       function setStatus(isOnline)
       {
         if(isOnline){
@@ -64,7 +83,7 @@
           getElem("mm_latest_time").innerHTML = date.split(', ')[1];
           getElem("mm_status_datapoint").innerHTML = date;
         }
-        getElem("mm_latest_temp").innerHTML = Math.round(reading)+"° F"; // And reading
+        getElem("mm_latest_temp").innerHTML = Math.round(reading*10)/10+"° F"; // And reading
       }
 
 
@@ -78,8 +97,7 @@
         xhttp.onreadystatechange = function() {
           if(this.readyState == 4){
             if(this.status == 200) {
-              json = this.responseText;
-              values = JSON.parse(json);
+              values = JSON.parse(this.responseText);
               onSuccess(values);
             }
             else if(onError!=null) {
@@ -121,8 +139,8 @@
         // Set latest values
         if(data.length > 0 ){
           var last_point = data[data.length-1];
-          last_timestamp = last_point[0];
-          setLatestReading(last_timestamp, last_point[1]);
+          LAST_TIMESTAMP = last_point[0];
+          setLatestReading(LAST_TIMESTAMP, last_point[1]);
           
           // Parse out all chart data 
           data = parseChartData(data);
@@ -131,7 +149,7 @@
         // Setup HTML elements for the chart display
         getElem("mm_chart").style.display = "block";
         getElem("mm_loader").style.display = "none";
-        getElem("mm_chart_title").innerHTML = "Recorded Temperatures (F)";
+        getElem("mm_chart_title").innerHTML = "Average Temperature by Minute (F)";
         var ctx = getElem("mm_chart").getContext('2d');
         Chart.defaults.global.defaultFontFamily = 'system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,"Noto Sans","Liberation Sans",sans-serif,"Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol","Noto Color Emoji"';
         
@@ -160,7 +178,7 @@
                       if (label) {
                           label += ': ';
                       }
-                      label += Math.round(tooltipItem.yLabel) + "°";
+                      label += Math.round(tooltipItem.yLabel*10)/10 + "°";
                       return label;
                   },
                 },
@@ -183,7 +201,7 @@
         
         // Trigger refresh
         loaded_initial = true;
-        window.setInterval(refresh, 5*1000);
+        window.setInterval(refresh, 10*1000);
       }
       
       
@@ -200,49 +218,64 @@
             
           // Grab the last data point and update if it's newer
           last = values[values.length-1];
-          if(last[0]!=last_timestamp){
-            // Update temperatuere reading
-            setLatestReading(last[0], last[1]);
-            // And chart
+          if(last[0]!=LAST_TIMESTAMP){
             updateChart(values);
-            // Then the timestamp
-            last_timestamp = last[0];
+            LAST_TIMESTAMP = last[0];
           } 
         };
         
-        getChartData("all", onChartUpdate, function(){ setStatus(false); }, last_timestamp);
+        var onLatestUpdate = function(data)
+        {
+          setStatus(true);
+          if(data.length == 0)
+            return;
+          setLatestReading(data[0], data[1]);
+        }
+        getChartData("minutes", onChartUpdate, function(){ setStatus(false); }, LAST_TIMESTAMP);
+        getChartData("latest", onLatestUpdate, function(){ setStatus(false);}, 0);
+
       }
-      
+     
+
       // Updates the main chart with new data points
       function updateChart(raw_data)
       {
         var chart_data = parseChartData(raw_data);
         for(var i = 0; i<chart_data.length; i++){
-          if(raw_data[i][0]>last_timestamp)
+          if(raw_data[i][0]>LAST_TIMESTAMP)
             CHART.data.datasets[0].data.push(chart_data[i]);
         }
         CHART.update();
       }
 
+
       // Initializes the dashboard systems
       function init()
       {
-        getElem("mm_status_host").innerHTML = API_HOST;
+        // URL parameter
+        URL_PARAMS = new URLSearchParams(location.search);
+        host = URL_PARAMS.get("host");
+        if(host!==null)
+          API_HOST = host;
         
+        getElem("mm_status_host").innerHTML = htmlSanitize(API_HOST);
         var onChartError = function(){
           getElem('mm_chart_title').innerHTML = "Error Loading Data<br/><br/>:(";
           getElem('mm_loader').style.display = "none";
           setStatus(false);
         };
         
-        getChartData("all", makeChart, onChartError, 0);
+        hours_to_show = 12;
+        getChartData("minutes", makeChart, onChartError, localDateToUTCUnixTS() - hours_to_show*60*60);
       }
-
+      
     </script>
+    
     <!-- Required meta tags -->
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
     <link rel="icon" type="image/png" href="media/icon-32x32.png">
+    
     <!-- Bootstrap CSS -->
     <link href="media/css/bootstrap.min.css" rel="stylesheet" >
   	<link href='media/css/Chart.min.css' rel="stylesheet">
@@ -250,8 +283,6 @@
     <title>MeadMonitor</title>
   </head>
   <body>
-	<script src='media/js/Chart.bundle.min.js'></script>
-  
   <!-- Navigation -->
 	<nav class="navbar navbar-expand-md navbar-dark bg-dark fixed-top">
 	  <div class="container-fluid">
@@ -339,6 +370,7 @@
     </div>
   </footer>
   <script src="media/js/bootstrap.bundle.min.js" ></script>
+  <script src='media/js/Chart.bundle.min.js'></script>
   <script>init();</script>
   </body>
 </html>

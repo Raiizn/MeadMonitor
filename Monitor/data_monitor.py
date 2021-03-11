@@ -118,7 +118,9 @@ class BaseDataMonitor(ABC):
                 self.insert_into_database(day_average, utc_timestamp, DAY_S)
 
         # Insert new point into database after computing averages
-        self.insert_into_database(point, utc_timestamp, MIN_DURATION)
+        if utc_timestamp % MIN_DURATION == 0:
+            self.insert_into_database(point, utc_timestamp, MIN_DURATION)
+
         self.conn.commit()
 
 
@@ -168,13 +170,12 @@ def __cli__():
         while True:
             start = time.time()
             datapoint, timestamp = monitor.get_reading()
-            print(f"Processing {datapoint} at {timestamp}")
             try:
                 monitor.process_datapoint(datapoint, timestamp)
             except:
                 traceback.print_exc()
               
-            time.sleep(MIN_DURATION - (time.time() - start))
+            time.sleep(1 - (time.time() - start))
     except KeyboardInterrupt:
         print("Captured KeyboardInterrupt; shutting down...")
     db.close()
